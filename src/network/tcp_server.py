@@ -113,7 +113,44 @@ class KVServer:
         - Handle ConnectionResetError and other exceptions
         """
         # === TODO START: Implement handle_client ===
-        raise NotImplementedError("TODO: Implement this method")
+        peer = writer.get_extra_info("peername")
+        self._connection_count += 1
+        logger.debug(f"Client connected: {peer}")
+
+        try:
+            while True:
+                data = await reader.readline()
+                if not data:
+                    logger.debug(f"Client disconnected: {peer}")
+                    break
+
+                try:
+                    text = data.decode().strip()
+                except UnicodeDecodeError:
+                    response = Response.error("invalid encoding")
+                    writer.write(self.parser.format_response(response).encode())
+                    await writer.drain()
+                    continue
+
+                command = self.parser.parse_request(text)
+                self._total_requests += 1
+
+                if command.type == CommandType.QUIT:
+                    logger.debug(f"Client sent QUIT: {peer}")
+                    break
+
+                if not command.is_valid:
+                    response = Response.error("invalid command")
+                else:
+                    response = self._execute_command(command)
+
+                writer.write(self.parser.format_response(response).encode())
+                await writer.drain()
+        finally:
+            writer.close()
+            await writer.wait_closed()
+            logger.debug(f"Connection closed: {peer}")            
+
         # === TODO END ===
 
     def _execute_command(self, command) -> Response:
@@ -130,7 +167,28 @@ class KVServer:
             Response object with the result
         """
         # === TODO START: Implement _execute_command ===
-        raise NotImplementedError("TODO: Implement this method")
+        if command.type == CommandType.PUT:
+            self.store.put(command.key, command.value, command.ttl)
+            return Response.stored()
+        
+        elif command.type == CommandType.GET:
+            value = self.store.get(command.key)
+            if value is not None:
+                return Response.value_response(value)
+            else:
+                return Response.key_not_found()
+            
+        elif command.type == CommandType.DELETE:
+            deleted = self.store.delete(command.key)
+            if deleted:
+                return Response.deleted()
+            else:
+                return Response.key_not_found()
+
+        elif command.type == CommandType.EXISTS:
+            return Response.exists_response(self.store.exists(command.key))
+
+        return Response.error("unknown command")        
         # === TODO END ===
 
     async def start(self) -> None:
@@ -151,7 +209,17 @@ class KVServer:
             asyncio.run(server.start())
         """
         # === TODO START: Implement start ===
-        raise NotImplementedError("TODO: Implement this method")
+        self._server = await asyncio.start_server(
+            self.handle_client,
+            host=self.host,
+            port=self.port
+        )
+
+        self._running = True
+        logger.info(f"Server started on {self.host}:{self.port}")
+
+        async with self._server:
+            await self._server.serve_forever()
         # === TODO END ===
 
     async def stop(self) -> None:
@@ -161,7 +229,11 @@ class KVServer:
         Closes the server and waits for it to fully shut down.
         """
         # === TODO START: Implement stop ===
-        raise NotImplementedError("TODO: Implement this method")
+        if self._server :
+            self._server.close()
+            await self._server.wait_closed()
+            self._running = False
+            logger.info("Server stopped")
         # === TODO END ===
 
     def is_running(self) -> bool:
