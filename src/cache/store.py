@@ -45,16 +45,18 @@ class KVStore:
         Args:
             max_size: Maximum number of keys (default from settings.MAX_KEYS)
         """
-        self.max_size = max_size if max_size is not None else settings.MAX_KEYS
+        
 
         # === TODO START: Initialize internal storage ===
-        raise NotImplementedError("TODO: Implement this method")
+        self.max_size = max_size if max_size is not None else settings.MAX_KEYS
+
+        self._store = OrderedDict() 
         # === TODO END ===
 
     def put(self, key: str, value: str, ttl: int = 0) -> bool:
         """
         Insert or update a key-value pair.
-
+        
         Args:
             key: The key to store
             value: The value to associate with the key
@@ -72,7 +74,16 @@ class KVStore:
                   evict LRU item if cache full when adding new key
         """
         # === TODO START: Implement put with TTL and LRU ===
-        raise NotImplementedError("TODO: Implement this method")
+        expiry= time.time() + ttl if ttl > 0 else 0
+
+        if key in self._store:
+            self._store.pop(key)
+
+        elif len(self._store) >= self.max_size:
+            self._store.popitem(last=False)
+
+        self._store[key] = (value, expiry)
+        return True
         # === TODO END ===
 
     def get(self, key: str) -> Optional[str]:
@@ -93,7 +104,16 @@ class KVStore:
         - Task 5: Update LRU order - move accessed key to most recent
         """
         # === TODO START: Implement get with TTL check and LRU update ===
-        raise NotImplementedError("TODO: Implement this method")
+        if key not in self._store:
+            return None
+        value, expiry = self._store[key]
+
+        if expiry >0 and time.time() > expiry:
+            del self._store[key]
+            return None
+        
+        self._store.move_to_end(key)
+        return value
         # === TODO END ===
 
     def delete(self, key: str) -> bool:
@@ -113,7 +133,17 @@ class KVStore:
         - Task 4: Expired keys should be treated as non-existent (return False)
         """
         # === TODO START: Implement delete with expiration check ===
-        raise NotImplementedError("TODO: Implement this method")
+        if key not in self._store:
+            return False
+        
+        value , expiry = self._store[key]
+        if expiry >0 and time.time() > expiry:
+            del self._store[key]
+            return False
+        
+        del self._store[key]
+        return True
+
         # === TODO END ===
 
     def exists(self, key: str) -> bool:
@@ -133,7 +163,17 @@ class KVStore:
         - Task 4: Return False for expired keys; perform lazy cleanup
         """
         # === TODO START: Implement exists with expiration check ===
-        raise NotImplementedError("TODO: Implement this method")
+        
+        if key not in self._store:
+            return False
+        
+        value , expiry = self._store[key]
+
+        if expiry >0 and time.time() > expiry:
+            del self._store[key]
+            return False
+        
+        return True
         # === TODO END ===
 
     def size(self) -> int:
@@ -150,7 +190,7 @@ class KVStore:
     def clear(self) -> None:
         """Remove all keys from the store."""
         # === TODO START: Implement clear ===
-        raise NotImplementedError("TODO: Implement this method")
+        self._store.clear()
         # === TODO END ===
 
     def cleanup_expired(self) -> int:
@@ -166,7 +206,17 @@ class KVStore:
         Task 4 Bonus: Implement this for active expiration cleanup.
         """
         # === TODO START: Implement cleanup_expired (Bonus) ===
-        raise NotImplementedError("TODO: Implement this method")
+        now = time.time()
+        removed_count = 0
+
+        keys = list(self._store.keys())
+        for key in keys:
+            value, expiry = self._store[key]
+            if expiry > 0 and now > expiry:
+                del self._store[key]
+                removed_count += 1
+
+        return removed_count        
         # === TODO END ===
 
     def get_stats(self) -> Dict[str, Any]:
