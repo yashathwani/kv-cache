@@ -15,6 +15,7 @@ Key asyncio concepts needed:
 """
 
 import asyncio
+from csv import writer
 import logging
 from asyncio import StreamReader, StreamWriter
 from typing import Optional
@@ -23,6 +24,16 @@ from ..cache.store import KVStore
 from ..config.settings import settings
 from ..protocol.commands import CommandType, Response
 from ..protocol.parser import ProtocolParser
+import os
+
+
+from ..cluster.config import (
+    NODES,
+    get_shard_id,
+    get_primary_node,
+    get_replica_node,
+)
+
 
 # Configure logging
 logging.basicConfig(
@@ -62,6 +73,7 @@ class KVServer:
             host: str = None,
             port: int = None,
             store: KVStore = None,
+            node_id: int = None,
     ):
         """
         Initialize the server.
@@ -76,6 +88,7 @@ class KVServer:
         self.store = store if store is not None else KVStore()
         self.parser = ProtocolParser()
 
+        self.node_id = node_id if node_id is not None else int(os.getenv("NODE_ID", "1")) 
         # Server state
         self._server: Optional[asyncio.Server] = None
         self._running = False
@@ -138,11 +151,21 @@ class KVServer:
                 if command.type == CommandType.QUIT:
                     logger.debug(f"Client sent QUIT: {peer}")
                     break
-
+                
                 if not command.is_valid:
                     response = Response.error("invalid command")
+                    writer.write(self.parser.format_response(response).encode())
+                    await writer.drain()
+                    continue
+               
+
+                shard = get_shard_id(command.key)
+                primary = get_primary_node(shard)
+
+                if primary != self.node_id:
+                    response = await self._forward(command, primary)
                 else:
-                    response = self._execute_command(command)
+                    response = await self._execute_primary(command)
 
                 writer.write(self.parser.format_response(response).encode())
                 await writer.drain()
@@ -190,7 +213,66 @@ class KVServer:
 
         return Response.error("unknown command")        
         # === TODO END ===
+    async def _execute_primary(self, command) -> Response:
+        """Execute on primary & replicate if needed"""
 
+        # PUT
+        if command.type == CommandType.PUT:
+            self.store.put(command.key, command.value, command.ttl)
+
+            # === REPLICATION ===
+            shard = get_shard_id(command.key)
+            replica = get_replica_node(shard)
+            if replica != self.node_id:
+                await self._forward(command, replica)
+
+            return Response.stored()
+
+        # DELETE
+        if command.type == CommandType.DELETE:
+            ok = self.store.delete(command.key)
+
+            shard = get_shard_id(command.key)
+            replica = get_replica_node(shard)
+            if replica != self.node_id:
+                await self._forward(command, replica)
+
+            return Response.deleted() if ok else Response.key_not_found()
+
+        # READS (Primary only)
+        if command.type == CommandType.GET:
+            val = self.store.get(command.key)
+            return Response.value_response(val) if val else Response.key_not_found()
+
+        if command.type == CommandType.EXISTS:
+            return Response.exists_response(self.store.exists(command.key))
+
+        return Response.error("invalid command")
+
+    async def _forward(self, command, node_id: int) -> Response:
+        """Forward command to another node"""
+        node = NODES[node_id]
+
+        reader, writer = await asyncio.open_connection(
+            node["host"], node["port"]
+        )
+
+        writer.write((command.raw + "\n").encode())
+        await writer.drain()
+
+        data = await reader.readline()
+        writer.close()
+        await writer.wait_closed()
+        text = data.decode().strip()
+
+        if text.startswith("OK"):
+            if text == "OK":
+                return Response.ok()
+            return Response.ok(text[3:])
+        else:
+            return Response.error(text[6:])
+    
+         
     async def start(self) -> None:
         """
         Start the server and begin accepting connections.
