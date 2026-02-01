@@ -55,7 +55,16 @@ For **read operations (GET / EXISTS)**:
 
 This makes sure writes are consistent and also provides backup incase primary fails.
 
+### Challenges
 
+One of the main challenge was routing requests correctly when clients could connect to **any node**,
+even replica nodes. I handled this by making sure **every node calculates the shard and primary node**
+for each key independently. So even if request comes to a replica or wrong node, it gets
+forwarded to the correct primary safely. The primary then executes operation and does synchronous
+replication to replica. This same routing logic on all nodes made the design simpler and made sure
+everything works correctly without client needing to know which node owns what shard.
+
+---
 
 Part B: Beyond the Basics (Research Write-up)
 ---------------------------------------------
