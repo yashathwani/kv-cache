@@ -144,7 +144,14 @@ class KVServer:
                     writer.write(self.parser.format_response(response).encode())
                     await writer.drain()
                     continue
+                
 
+                if text.startswith("REPLICATE"):
+                    command = self.parser.parse_request(text[10:])
+                    response = await self._execute_replica(command)
+                    writer.write(self.parser.format_response(response).encode())
+                    await writer.drain()
+                    continue
                 command = self.parser.parse_request(text)
                 self._total_requests += 1
 
@@ -224,7 +231,7 @@ class KVServer:
             shard = get_shard_id(command.key)
             replica = get_replica_node(shard)
             if replica != self.node_id:
-                await self._forward(command, replica)
+                await self._forward(command, replica,is_replica=True)
 
             return Response.stored()
 
@@ -235,7 +242,7 @@ class KVServer:
             shard = get_shard_id(command.key)
             replica = get_replica_node(shard)
             if replica != self.node_id:
-                await self._forward(command, replica)
+                await self._forward(command, replica,is_replica=True)
 
             return Response.deleted() if ok else Response.key_not_found()
 
@@ -249,15 +256,17 @@ class KVServer:
 
         return Response.error("invalid command")
 
-    async def _forward(self, command, node_id: int) -> Response:
+    async def _forward(self, command, node_id: int,is_replica: bool = False) -> Response:
         """Forward command to another node"""
         node = NODES[node_id]
 
         reader, writer = await asyncio.open_connection(
             node["host"], node["port"]
         )
-
-        writer.write((command.raw + "\n").encode())
+        if is_replica:
+            writer.write(f"REPLICATE {command.raw}\n".encode())
+        else:
+            writer.write((command.raw + "\n").encode())
         await writer.drain()
 
         data = await reader.readline()
@@ -272,6 +281,17 @@ class KVServer:
         else:
             return Response.error(text[6:])
     
+    async def _execute_replica(self,command)->Response:
+        if command.type==CommandType.PUT:
+            self.store.put(command.key,command.value,command.ttl)
+            return Response.stored()
+        elif command.type==CommandType.DELETE:
+            self.store.delete(command.key)
+            return Response.deleted()
+        else:
+            return Response.error("invalid command")
+            
+        
          
     async def start(self) -> None:
         """

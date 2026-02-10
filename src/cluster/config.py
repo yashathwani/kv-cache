@@ -1,3 +1,4 @@
+import hashlib
 
 NUM_SHARDS = 3
 
@@ -19,7 +20,8 @@ SHARD_REPLICA = {
 
 
 def get_shard_id(key: str) -> int:
-    return hash(key) % NUM_SHARDS
+    h = int(hashlib.md5(key.encode()).hexdigest(), 16)
+    return h % NUM_SHARDS
 
 
 def get_primary_node(shard_id: int) -> int:
